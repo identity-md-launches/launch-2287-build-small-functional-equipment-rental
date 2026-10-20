@@ -1,0 +1,96 @@
+
+added 89 packages in 12s
+
+> fieldkit-testnet-rental@1.0.0 typecheck
+> tsc --noEmit
+
+
+> fieldkit-testnet-rental@1.0.0 test
+> vitest run
+
+
+ RUN  v5.0.5 <clean-checkout>
+
+
+ Test Files  2 passed (2)
+      Tests  76 passed (76)
+   Start at  15:41:07
+   Duration  1.15s (environment 35%, import 29%, tests 21%, transform 15%, worker 1%)
+
+
+> fieldkit-testnet-rental@1.0.0 abi:check
+> node scripts/check-abi.mjs
+
+RentalEscrow: all 76 ABI entries match compilation of the pinned sources.
+MockPaymentToken: all 21 ABI entries match compilation of the pinned sources.
+Verified 15 source files. Offline check; no network used.
+
+> fieldkit-testnet-rental@1.0.0 build
+> vite build
+
+vite v8.3.4 building client environment for production...
+transforming...
+✓ 1804 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   1.00 kB │ gzip:   0.48 kB
+dist/assets/index-qvHnQc89.css   13.34 kB │ gzip:   3.50 kB
+dist/assets/ccip-8M-0R_xu.js      2.84 kB │ gzip:   1.31 kB
+dist/assets/dist-CnU2TJZy.js     98.96 kB │ gzip:  31.97 kB
+dist/assets/index-CGTDrBp_.js   633.69 kB │ gzip: 186.59 kB
+
+✓ built in 370ms
+
+> fieldkit-testnet-rental@1.0.0 check:bundle
+> node scripts/check-bundle.mjs
+
+{
+  "files": 65,
+  "sourceAndExportBytes": 1190305,
+  "limit": 8388608,
+  "productionExportBytes": 785461,
+  "exclusions": [
+    ".git/",
+    ".imd/ (inputs)",
+    "node_modules/",
+    "test/scratch/"
+  ]
+}
+
+> fieldkit-testnet-rental@1.0.0 test:browser
+> node tests/browser/smoke.mjs
+
+{
+  "environment": "Chromium; mocked EIP-6963 Rabby and intercepted public RPC; production dist under /preview/; zero live writes",
+  "browserVersion": "141.0.7390.37",
+  "viewports": [
+    320,
+    390,
+    768,
+    1440
+  ],
+  "results": [
+    {
+      "scenario": "Complete journey, exact approval, pending reload, booking recovery, foreign lookup, snapshot policy, cancel credit, aggregate withdrawal, chain switch and account clearing",
+      "passed": true
+    },
+    {
+      "scenario": "Lost response after recorded broadcast, pending zero mapping, same-calldata retry rejected, original reference retained/visible, fresh actions blocked through reload, original mining and receipt recovery without another send",
+      "passed": true
+    },
+    {
+      "scenario": "Rejected wallet prompt, reverted receipt, renewed policy acceptance, honest RPC failure/retry, text-only metadata and disconnect",
+      "passed": true
+    },
+    {
+      "scenario": "Phone wallet picker without injection: four open-in links and Coinbase Smart Wallet; no relay or project ID",
+      "passed": true
+    },
+    {
+      "scenario": "Maximum uint256 6-decimal values, maximum policy ID and long untrusted metadata wrap at 320, 390 and 1440",
+      "passed": true
+    }
+  ],
+  "pageErrors": [],
+  "resourceErrors": []
+}

@@ -26,6 +26,7 @@ export function readJournal(store: Store, c: Context): Journal {
       if (!['prepared', 'submitted', 'uncertain'].includes(op.phase) || !uint(op.block) || !Number.isFinite(op.startedAt)) throw new Error();
       if (op.hash !== undefined && !hash(op.hash)) throw new Error();
       if (op.originalHash !== undefined && !hash(op.originalHash)) throw new Error();
+      if (op.priorUncertainty !== undefined && typeof op.priorUncertainty !== 'boolean') throw new Error();
       if (op.reservationId !== undefined && (!uint(op.reservationId) || BigInt(op.reservationId) === 0n)) throw new Error();
       if (op.ref !== undefined && (!hash(op.ref) || BigInt(op.ref) === 0n)) throw new Error();
       if (op.quote) {

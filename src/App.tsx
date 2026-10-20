@@ -65,6 +65,7 @@ export function App() {
       {op && <section className="pending-panel" aria-labelledby="pending-title">
         <div className="section-head"><h2 id="pending-title">Pending {op.kind === 'withdraw' ? 'refund withdrawal' : op.kind === 'approve' ? 'approval' : op.kind === 'reserve' ? 'reservation' : 'cancellation'}</h2><span className="status-label">{op.phase === 'prepared' ? busy ? 'Awaiting wallet response' : 'Wallet response unknown' : op.phase === 'uncertain' ? 'Confirmation unknown' : 'Awaiting receipt'}</span></div>
         <p>No success is assumed. This request is saved for this wallet, chain and escrow.</p>
+        {op.kind === 'reserve' && <p className="small">An earlier booking may still be pending even if a retry is rejected or no transaction hash is known. New actions stay blocked until this request is reconciled.</p>}
         {op.ref && <dl><DataRow label="Recovery reference"><code className="break-value">{op.ref}</code></DataRow></dl>}
         {op.quote && <p className="small">Accepted policy {op.quote.policyId}: {amount(BigInt(op.quote.deposit), op.quote.decimals)} {token} deposit, {amount(BigInt(op.quote.cancellationFee), op.quote.decimals)} {token} cancellation fee, {windowText(restoreQuote(op.quote).reservationWindow)} window.</p>}
         {op.hash && <p><a className="break-value" href={txLink(op.hash)} target="_blank" rel="noreferrer">View pending transaction ↗</a></p>}

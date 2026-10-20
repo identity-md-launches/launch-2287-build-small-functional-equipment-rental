@@ -200,6 +200,122 @@ describe('receipt and recovery safety', () => {
     expect(f.chain.byRef).toHaveBeenCalledWith(renter, op.ref);
     expect(reloaded.getState().booking?.id).toBe(7n);
   });
+  it('retains an earlier pending booking when only its same-reference retry is rejected, reloads and recovers the original', async () => {
+    const f = await approved();
+    vi.mocked(f.wallet.send)
+      .mockRejectedValueOnce(new Error('Transport disconnected after broadcast; original still pending'))
+      .mockRejectedValueOnce({ code: 4001 });
+    await f.engine.execute('reserve');
+    const original = readJournal(f.store, context).operation!;
+    const persisted = f.values.get(journalKey(context));
+    expect(original.phase).toBe('uncertain');
+    expect(original.hash).toBeUndefined();
+    expect(await f.chain.byRef(renter, original.ref!)).toBe(0n);
+
+    // A newer preflight block must not replace the original recovery search boundary.
+    f.data.blockNumber = 25n;
+    await f.engine.retryReservation();
+    expect(vi.mocked(f.wallet.send).mock.calls[1][1]).toEqual(original);
+    expect(f.engine.getState().journal.operation).toEqual(original);
+    expect(readJournal(f.store, context).operation).toEqual(original);
+    expect(f.values.get(journalKey(context))).toBe(persisted);
+    expect(f.engine.getState().error).toMatch(/retry.*rejected/i);
+    expect(f.engine.getState().error).toContain('earlier booking may still be pending');
+    expect(f.engine.getState().accepted).toBeDefined();
+    for (const kind of ['reserve', 'approve', 'cancel', 'withdraw'] as const) {
+      await f.engine.execute(kind, 7n);
+      expect(f.engine.getState().error).toContain('earlier request is unresolved');
+    }
+    expect(f.wallet.send).toHaveBeenCalledTimes(2);
+
+    const reloaded = new RentalEngine(f.chain, f.wallet, f.store);
+    await reloaded.setContext(context);
+    expect(reloaded.getState().journal.operation).toEqual(original);
+    expect(f.values.get(journalKey(context))).toBe(persisted);
+    await reloaded.execute('reserve');
+    expect(reloaded.getState().error).toContain('earlier request is unresolved');
+    expect(f.wallet.send).toHaveBeenCalledTimes(2);
+
+    // Only the first, already-broadcast request mines. Recovery must never send again.
+    f.apply(original);
+    await reloaded.recover();
+    expect(f.chain.findReservationHash).toHaveBeenCalledWith(7n, renter, BigInt(original.block));
+    expect(reloaded.getState().booking?.reservation.clientRef).toBe(original.ref);
+    expect(reloaded.getState().booking?.reservation.deposit.toString()).toBe(original.quote!.deposit);
+    expect(reloaded.getState().journal.operation).toBeUndefined();
+    expect(readJournal(f.store, context).lastTransaction).toEqual({ kind: 'reserve', hash, success: true });
+    expect(f.data.balance).toBe(50_000_000n);
+    expect(f.wallet.send).toHaveBeenCalledTimes(2);
+  });
+  it.each(['transport', 'mapping', 'identity', 'snapshot', 'policy', 'allowance', 'gas', 'simulation'] as const)('retains the original uncertain request after a retry %s failure', async failure => {
+    const f = await approved();
+    vi.mocked(f.wallet.send).mockRejectedValueOnce(new Error('Original send response lost'));
+    await f.engine.execute('reserve');
+    const original = readJournal(f.store, context).operation!;
+    const persisted = f.values.get(journalKey(context));
+    if (failure === 'transport') vi.mocked(f.wallet.send).mockRejectedValueOnce(new Error('Retry transport failed'));
+    if (failure === 'mapping') vi.mocked(f.chain.byRef).mockRejectedValueOnce(new Error('Mapping unavailable'));
+    if (failure === 'identity') vi.mocked(f.wallet.identity).mockRejectedValueOnce({ cause: { code: 4001 } });
+    if (failure === 'snapshot') vi.mocked(f.chain.snapshot).mockRejectedValueOnce(new Error('Snapshot unavailable'));
+    if (failure === 'policy') f.data.quote!.policyId += 1n;
+    if (failure === 'allowance') f.data.allowance = 0n;
+    if (failure === 'gas') f.data.nativeBalance = 0n;
+    if (failure === 'simulation') vi.mocked(f.chain.simulate).mockRejectedValueOnce({ code: 4001 });
+    await f.engine.retryReservation();
+    expect(f.engine.getState().journal.operation).toEqual(original);
+    expect(f.values.get(journalKey(context))).toBe(persisted);
+    expect(f.engine.getState().error).toBeTruthy();
+    await f.engine.execute('reserve');
+    expect(f.engine.getState().error).toContain('earlier request is unresolved');
+    expect(f.wallet.send).toHaveBeenCalledTimes(failure === 'transport' ? 2 : 1);
+  });
+  it('retains a saved prepared request when its retry is rejected after reload', async () => {
+    const f = await approved();
+    vi.mocked(f.wallet.send).mockRejectedValueOnce(new Error('Original response lost'));
+    await f.engine.execute('reserve');
+    const journal = readJournal(f.store, context);
+    // A browser may stop after saving, while the wallet is sending, before phase can update.
+    journal.operation!.phase = 'prepared';
+    f.values.set(journalKey(context), JSON.stringify(journal));
+    const reloaded = new RentalEngine(f.chain, f.wallet, f.store);
+    await reloaded.setContext(context);
+    vi.mocked(f.wallet.send).mockRejectedValueOnce({ code: 4001 });
+    await reloaded.retryReservation();
+    expect(readJournal(f.store, context).operation).toEqual({ ...journal.operation, phase: 'uncertain' });
+    expect(reloaded.getState().journal.operation).toEqual(readJournal(f.store, context).operation);
+    await reloaded.execute('reserve');
+    expect(f.wallet.send).toHaveBeenCalledTimes(2);
+  });
+  it.each([false, true])('retains earlier uncertainty when a returned retry receipt fails (different action: %s), including across reload', async differentAction => {
+    const f = await approved();
+    vi.mocked(f.wallet.send).mockRejectedValueOnce(new Error('Original response lost')).mockResolvedValueOnce(replacement);
+    await f.engine.execute('reserve');
+    const original = readJournal(f.store, context).operation!;
+    vi.mocked(f.chain.wait).mockImplementation(async (_address, op) => ({ hash: op.hash!, success: op.hash === hash || differentAction, matches: op.hash === hash || !differentAction }));
+    await f.engine.retryReservation();
+    const pending = readJournal(f.store, context).operation!;
+    expect(pending).toEqual({ ...original, hash: replacement, originalHash: replacement, priorUncertainty: true });
+    expect(f.engine.getState().error).toContain('earlier booking may still be pending');
+    const reloaded = new RentalEngine(f.chain, f.wallet, f.store);
+    await reloaded.setContext(context);
+    expect(readJournal(f.store, context).operation).toEqual(pending);
+    await reloaded.execute('reserve');
+    expect(f.wallet.send).toHaveBeenCalledTimes(2);
+
+    f.apply(original);
+    // The event for the original must supersede a failed retry hash during recovery.
+    vi.mocked(f.chain.wait).mockImplementationOnce(async (_address, op) => {
+      expect(op.hash).toBe(hash);
+      expect(readJournal(f.store, context).operation?.originalHash).toBe(replacement);
+      expect(op.block).toBe(original.block); expect(op.startedAt).toBe(original.startedAt);
+      return { hash, success: true, matches: true };
+    });
+    await reloaded.recover();
+    expect(reloaded.getState().booking?.reservation.clientRef).toBe(original.ref);
+    expect(readJournal(f.store, context).operation).toBeUndefined();
+    expect(readJournal(f.store, context).lastTransaction?.hash).toBe(hash);
+    expect(f.wallet.send).toHaveBeenCalledTimes(2);
+  });
   it('recovers a lost hash through reservationByRef and creation logs, then checks a receipt', async () => {
     const f = await approved(); vi.mocked(f.wallet.send).mockImplementationOnce(async (_c, op) => { f.apply(op); throw new Error('Wallet response lost'); });
     await f.engine.execute('reserve');
@@ -220,10 +336,13 @@ describe('receipt and recovery safety', () => {
     await f.engine.execute('reserve'); f.data.quote!.policyId = 2n;
     await f.engine.retryReservation(); expect(f.wallet.send).toHaveBeenCalledTimes(1); expect(f.engine.getState().error).toContain('policy changed');
   });
-  it('clears a known rejected signature without claiming success', async () => {
+  it('clears a rejected first attempt without claiming success and allows a fresh explicit attempt', async () => {
     const f = await approved(); vi.mocked(f.wallet.send).mockRejectedValueOnce({ code: 4001 });
     await f.engine.execute('reserve'); expect(f.engine.getState().error).toContain('rejected');
     expect(readJournal(f.store, context).operation).toBeUndefined(); expect(f.engine.getState().booking).toBeUndefined();
+    await f.engine.execute('reserve');
+    expect(f.wallet.send).toHaveBeenCalledTimes(2);
+    expect(f.engine.getState().booking?.id).toBe(7n);
   });
   it('retains a known broadcast hash even if later RPC failure carries a rejection code', async () => {
     const f = await approved(); vi.mocked(f.chain.wait).mockRejectedValueOnce({ code: 4001, message: 'RPC receipt request refused' });

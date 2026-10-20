@@ -114,10 +114,12 @@ export class RentalEngine {
     if (this.state.storageError) throw new Error(this.state.storageError);
     return c;
   }
-  private checkBooking(data: Snapshot, accepted: Quote) {
+  private checkBooking(data: Snapshot, accepted: Quote, retry = false) {
     if (!sameQuote(accepted, data.quote)) {
       this.patch({ data, accepted: undefined });
-      throw new Error('The policy changed. Review the new deposit, fee and expiry, then accept again. No transaction was requested.');
+      throw new Error(retry
+        ? 'The policy changed. This retry was not sent; the earlier booking may still be pending. The saved request has been retained. Check pending request.'
+        : 'The policy changed. Review the new deposit, fee and expiry, then accept again. No transaction was requested.');
     }
     if (!data.item?.exists || !data.item.listed || data.item.state !== 0) throw new Error('Item 1 is no longer available for reservation. Refresh its current state.');
     if ((data.balance ?? 0n) < accepted.deposit) throw new Error('Insufficient mock tokens for this deposit. Ask the demo operator for test tokens.');
@@ -158,22 +160,24 @@ export class RentalEngine {
       // Check again after asynchronous preflight; another tab may have saved a request.
       if (readJournal(this.store, c).operation) throw new Error('Another tab has an unresolved request. Check it before continuing.');
       this.save(c, { ...stored, operation: op }, epoch);
-      await this.send(c, op, epoch);
+      await this.send(c, op, epoch, 'first');
     }, true);
   }
-  private async send(c: Context, op: Operation, epoch: number) {
+  private async send(c: Context, op: Operation, epoch: number, attempt: 'first' | 'retry') {
     let returnedHash = op.hash;
+    // A retry rejection says nothing about an earlier send, even a saved prepared send.
+    const canClearRejection = attempt === 'first' && op.phase === 'prepared' && !op.hash && !op.originalHash;
     if (this.current(c, epoch)) this.patch({ message: `${labels[op.kind]}: confirm this action in your wallet.` });
     try {
       const hash = await this.wallet.send(c, op);
       returnedHash = hash;
-      const submitted: Operation = { ...op, hash, originalHash: op.originalHash ?? hash, phase: 'submitted' };
+      const submitted: Operation = { ...op, ...(attempt === 'retry' ? { priorUncertainty: true } : {}), hash, originalHash: op.originalHash ?? hash, phase: 'submitted' };
       // Preserve a returned hash in the visible state even if storage subsequently fails.
       if (this.current(c, epoch)) this.patch({ journal: { ...this.state.journal, operation: submitted } });
       this.save(c, { ...readJournal(this.store, c), operation: submitted }, epoch);
       if (this.current(c, epoch)) await this.settle(c, submitted, epoch);
     } catch (error) {
-      if (isRejected(error) && !returnedHash) {
+      if (isRejected(error) && !returnedHash && canClearRejection) {
         this.save(c, { ...readJournal(this.store, c), operation: undefined }, epoch);
       } else {
         const latest = this.current(c, epoch) ? this.state.journal.operation ?? op : readJournal(this.store, c).operation ?? op;
@@ -181,6 +185,7 @@ export class RentalEngine {
         if (this.current(c, epoch)) this.patch({ journal: { ...this.state.journal, operation: uncertain } });
         this.save(c, { ...readJournal(this.store, c), operation: uncertain }, epoch);
       }
+      if (attempt === 'retry' && isRejected(error)) throw new Error('Retry rejected in your wallet. The earlier booking may still be pending. The saved request has been retained. Check pending request.');
       throw error;
     }
   }
@@ -195,6 +200,8 @@ export class RentalEngine {
     if (!receipt.matches && manualHash) throw new Error('That transaction does not match this saved request. The pending request has been retained.');
     let journal = readJournal(this.store, c);
     if (!receipt.success || !receipt.matches) {
+      // A failed retry receipt cannot resolve the earlier hashless attempt either.
+      if (op.priorUncertainty) throw new Error('This retry did not confirm the booking. The earlier booking may still be pending. The saved request and known hashes have been retained. Check pending request.');
       if (op.kind === 'reserve' && op.ref && await this.chain.byRef(c.address, op.ref) !== 0n) throw new Error('This receipt did not confirm the booking, but the reference exists on chain. Keep the request and check the creation transaction in your wallet.');
       journal = { ...journal, operation: undefined, lastTransaction: { kind: op.kind, hash: receipt.hash, success: false } };
       this.save(c, journal, epoch);
@@ -240,7 +247,7 @@ export class RentalEngine {
           const reservation = await this.chain.reservation(id);
           this.assertCurrent(c, epoch);
           this.patch({ booking: { id, reservation } });
-          if (!op.hash && !manualHash) {
+          if ((!op.hash || op.priorUncertainty) && !manualHash) {
             const hash = await this.chain.findReservationHash(id, c.address, BigInt(op.block));
             this.assertCurrent(c, epoch);
             if (hash) { op = { ...op, hash }; this.save(c, { ...journal, operation: op }, epoch); }
@@ -264,13 +271,13 @@ export class RentalEngine {
       if (existing !== 0n || op.hash) throw new Error('A transaction or booking already exists for this request. Use Check pending request; a new payment will not be sent.');
       const fresh = await this.chain.snapshot(c.address);
       this.assertCurrent(c, epoch);
-      this.checkBooking(fresh, restoreQuote(op.quote));
+      this.checkBooking(fresh, restoreQuote(op.quote), true);
       if ((fresh.allowance ?? 0n) < BigInt(op.quote.deposit)) throw new Error('The saved booking no longer has enough allowance. Resolve the wallet transaction before starting another action.');
       if ((fresh.nativeBalance ?? 0n) === 0n) throw new Error('You need test ETH to pay gas.');
       await this.chain.simulate(c.address, op);
       await this.assertWallet(c, epoch);
       // Reuse the exact calldata and nonzero reference. The contract prevents a second deposit.
-      await this.send(c, op, epoch);
+      await this.send(c, op, epoch, 'retry');
     }, true);
   }
   storageChanged(key: string | null) {

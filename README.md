@@ -30,18 +30,24 @@ npm run preview
 
 The reproducible browser test runs the **production `dist/`** under `/preview/`, injects a mocked EIP-6963 Rabby provider and intercepts every public RPC request with a local in-memory ledger. It does not broadcast any transaction to a network. It manages and closes its own static server and Chromium in one foreground command.
 
-With Playwright and Chromium available to your tooling:
+Install the exact tested **Playwright 1.56.1** and its Chromium **141.0.7390.37 (build 1194)** outside the repository. From the repository root, after `npm ci`:
 
 ```sh
+FIELDKIT_BROWSER_TOOLS="$(mktemp -d /tmp/fieldkit-browser.XXXXXX)"
+npm install --prefix "$FIELDKIT_BROWSER_TOOLS" \
+  --cache "$FIELDKIT_BROWSER_TOOLS/npm-cache" --no-audit --no-fund playwright@1.56.1
+export IMD_PLAYWRIGHT="$FIELDKIT_BROWSER_TOOLS/node_modules/playwright/index.mjs"
+export PLAYWRIGHT_BROWSERS_PATH="$FIELDKIT_BROWSER_TOOLS/browsers"
+"$FIELDKIT_BROWSER_TOOLS/node_modules/.bin/playwright" install chromium
 npm run build
-IMD_PLAYWRIGHT=/absolute/path/to/playwright/index.mjs \
-PLAYWRIGHT_BROWSERS_PATH=/absolute/path/to/playwright-browsers \
 npm run test:browser
 ```
 
-If `playwright` is already resolvable as a Node module and its browser is installed, simply run `npm run test:browser`. For a separate tooling installation, install Playwright outside this repository, install its Chromium there, and point the two variables above at that installation. Playwright is not a runtime dependency of this site.
+These commands need no worker tooling or pre-existing reports directory. On minimal Linux installations, Playwright's `install --with-deps chromium` can install the required OS libraries where permitted. If Playwright 1.56.1 is already resolvable as a Node module and its browser is installed, simply run `npm run test:browser`. Playwright is not a runtime dependency of this site; keep its installation and caches outside the repository.
 
-The smoke test covers approval → pending booking → reload recovery → ID lookup and ownership → cancellation into credit → separate withdrawal. It also checks wallet rejection, reverted receipts, changed-policy acceptance, wrong chain and unknown-chain addition, account clearing, RPC failure/retry, untrusted metadata, keyboard dialog behavior, phone wallet choices and maximum integer amounts at 320, 390 and 1440 pixels. Results are written to `artifacts/browser-results.json`; temporary screenshots go to `test/scratch/browser/`.
+The smoke test covers approval → pending booking → reload recovery → ID lookup and ownership → cancellation into credit → separate withdrawal. Its lost-response regression records the first reservation broadcast, drops its response while it remains pending, rejects only the same-reference retry, checks the saved reference and disabled fresh actions through reload, then mines and recovers the original without another send. It also checks first-prompt rejection, reverted receipts, changed-policy acceptance, wrong chain and unknown-chain addition, account clearing, RPC failure/retry, untrusted metadata, keyboard dialog behavior, phone wallet choices and maximum integer amounts at 320, 390 and 1440 pixels, plus ordinary layout at 768. Results are written to `artifacts/browser-results.json`; temporary screenshots go to `test/scratch/browser/`. The command creates its own output directories.
+
+`npm run check:live` is optional and read-only. It creates `artifacts/live-read.json` and its directory itself. It needs the public RPC; all engine, ABI and mocked-browser tests work without that service. Neither report command requires manual directory creation.
 
 ## Static hosting
 
@@ -83,6 +89,7 @@ The frontend exposes only `approve`, `reserve`, `cancel` and `withdrawRefund` wr
 - No action is reported confirmed before a successful receipt. The mined transaction must also match sender, target, calldata and zero native value, and its receipt must be newer than the saved preflight block. An older identical withdrawal is not accepted as evidence for a new pending request. Sped-up replacements are checked and their hashes retained. Reverted or different replacement transactions are shown as failures. Receipt checks wait up to 30 seconds per attempt, then retain the unresolved request for explicit checking.
 - Reload reconnects an already authorized wallet without requesting a new connection. It checks the saved receipt and `reservationByRef`; it never automatically resubmits. If a send response was lost, the app looks up the reference and can search creation events in bounded 2,000-block chunks, at most 40,000 blocks from the saved starting block. A wallet transaction hash can also be supplied manually and is checked against the exact request.
 - An uncertain booking with **no known hash and no mapping result** can be retried explicitly with the **same** reference and accepted calldata after fresh checks. A known pending hash blocks resubmission. Changed policy or unresolved non-booking actions remain blocked until reconciled; the app does not discard a payment request or invent a new reference to get past uncertainty. Do not clear browser storage while a payment is unresolved.
+- Rejecting a **first** wallet attempt with no earlier uncertainty or broadcast evidence clears that attempt normally. Rejecting a **retry** leaves the earlier request unresolved: a zero mapping before mining or a missing returned hash does not prove it was never sent. Retry/preflight failures retain the original terms, calldata, reference, start time, block and known hashes in memory and storage. A returned retry hash also retains an optional `priorUncertainty` flag in the version-1 journal: a failed retry receipt cannot clear the earlier unknown attempt. Recovery can find the original creation receipt even when a failed retry hash is known. Fresh actions stay blocked until reconciliation.
 - The recovered reservation's status, renter, deposit, fee, policy and timing come from `getReservation`, not the item's new policy. Only the last local booking is remembered. ID lookup can show other renters' reservations and labels ownership. Local storage is not complete account history and is specific to this browser origin.
 - Cancellation rechecks renter, `Reserved` status and **chain timestamp strictly before expiry**. A confirmation explains the accepted fee. Cancellation creates escrow credit; it does not pay the wallet. Withdrawal separately re-reads and withdraws **all current credit**, potentially including other reservations. After confirmed actions, balances, availability and reservation state are refreshed. A refresh failure is reported separately from an already confirmed receipt.
 
@@ -91,13 +98,15 @@ The frontend exposes only `approve`, `reserve`, `cancel` and `withdrawRefund` wr
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` | Passed |
-| `npm test` | 64 tests passed in 2 files; mocked gateways, no network |
+| `npm test` | 76 tests passed in 2 files; includes the rejected-retry/reload/original-mining regression and first-attempt control; mocked gateways, no network |
 | `npm run abi:check` | Both full ABIs matched compilation of all 15 pinned source files; offline |
 | `npm run build` | Passed; relative production assets emitted in `dist/` |
-| `npm run test:browser` | Four mocked Chromium scenario groups passed; 320/390/1440 layouts; no JavaScript page errors |
-| Pinned taste@1 design probe | See `artifacts/validation.md` and `artifacts/design-probe.json` |
-| `npm run check:live` | Read-only public RPC check succeeded; `artifacts/live-read.json` pins the observation block |
+| `npm run test:browser` | Five mocked Chromium scenario groups passed; 320/390/768/1440 layouts; no page errors or failed local resources |
+| Pinned taste@1 design probe | 15/16 raw checks passed offline; header Connect wallet button flagged as a kicker, reviewed as a false positive; see `artifacts/validation.md` and `artifacts/design-probe.json` |
+| Read-only live check | `scripts/live-read.mjs` succeeded through the assignment's RPC provider; `artifacts/live-read.json` pins the observation block and names the public source |
 | `npm run check:bundle` | Under the 8 MiB submission limit; exact final count is reported by the command |
+
+The complete install/typecheck/test/ABI/build/bundle/browser sequence was also run in a fresh source copy without installed dependencies or an `artifacts/` directory. Each report command was separately checked with its output directory absent. `artifacts/validation.md` records the actual commands, failing-before evidence and final review coverage.
 
 The live observation found item 1 listed and available, token decimals 6, deposit `50000000`, fee `5000000`, window `86400` seconds. These are observation results, not runtime constants or promises of future availability. All wallet/write testing used mocks. No real Rabby extension, passkey account or live testnet write was exercised by the worker. These checks are self-reported, not independent certification.
 
@@ -118,4 +127,4 @@ Item 1 only. No full account history, transaction indexer, staff handover/return
 
 RPC outages and a lost wallet response can leave a request unresolved until its hash or reference can be reconciled. Refund withdrawals have no application idempotency key, so an uncertain withdrawal is never resent automatically. Browsers without Web Locks should use one tab. Coinbase Smart Wallet support for this custom testnet depends on the wallet vendor; failure is surfaced rather than simulated. Phone deep links, physical devices, WebKit, screen readers and native browser zoom have not been manually tested.
 
-`DESIGN.md` describes the implemented interface. `artifacts/validation.md` records review coverage, fixes and remaining limits. Bundle exclusions have an explicit zero-byte path budget in `.gitignore`: `/node_modules/**` and `/test/scratch/**`; `dist/` is intentionally included. The source plus export fits well below 8 MiB and contains no package archives or registry mirror.
+`DESIGN.md` describes the implemented interface. `artifacts/validation.md` records review coverage, fixes and remaining limits. Bundle exclusions have an explicit zero-byte path budget in `.gitignore`: `/node_modules/**` and `/test/scratch/**`; `dist/` is intentionally included. Eight named evidence files have explicit inclusion budgets totaling at most 983,040 bytes, overriding broader tooling exclusions so the referenced reports are delivered. The source plus export fits well below 8 MiB and contains no package archives or registry mirror.

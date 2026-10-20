@@ -3,3 +3,21 @@
 # Explicit path budget: /test/scratch/** = 0 submitted bytes (disposable checks).
 /test/scratch/
 # dist/ is a required, submitted production export. Do not ignore it.
+# Required validation evidence overrides broader tooling excludes, with an explicit path budget.
+!/artifacts/
+# /artifacts/* and /artifacts/screenshots/* default to 0 bytes except the named allowances below.
+/artifacts/*
+# /artifacts/validation.md <= 16384 bytes; /artifacts/design-probe.json <= 131072 bytes.
+!/artifacts/validation.md
+!/artifacts/design-probe.json
+# /artifacts/browser-results.json <= 8192 bytes; /artifacts/live-read.json <= 8192 bytes.
+!/artifacts/browser-results.json
+!/artifacts/live-read.json
+# /artifacts/clean-checks.txt <= 32768 bytes.
+!/artifacts/clean-checks.txt
+!/artifacts/screenshots/
+/artifacts/screenshots/*
+# Each of these three screenshot paths <= 262144 bytes; total evidence budget <= 983040 bytes.
+!/artifacts/screenshots/390-disconnected.png
+!/artifacts/screenshots/390-retry-rejected.png
+!/artifacts/screenshots/1440-complete.png

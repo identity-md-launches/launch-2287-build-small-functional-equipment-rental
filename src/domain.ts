@@ -16,6 +16,8 @@ export type Operation = {
   startedAt: number;
   hash?: Hash;
   originalHash?: Hash;
+  // A returned retry hash does not resolve an earlier send whose response was lost.
+  priorUncertainty?: boolean;
   ref?: Hex;
   quote?: StoredQuote;
   reservationId?: string;

@@ -26,10 +26,17 @@ const results = [];
 const screenshots = 'test/scratch/browser';
 await mkdir(screenshots, { recursive: true });
 const errors = [];
+const resourceErrors = [];
 async function setup(ledger = createLedger(), width = 390, injected = true) {
   const context = await browser.newContext({ viewport: { width, height: 844 }, ...(injected ? {} : { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1', isMobile: true, hasTouch: true }) });
   const page = await context.newPage();
   page.on('pageerror', e => errors.push(e.message));
+  page.on('requestfailed', request => {
+    if (request.url().startsWith(origin) && !request.failure()?.errorText.includes('ERR_ABORTED')) resourceErrors.push(request.url());
+  });
+  page.on('response', response => {
+    if (response.url().startsWith(origin) && response.status() >= 400) resourceErrors.push(`${response.status()} ${response.url()}`);
+  });
   await page.exposeFunction('mockWalletRequest', async args => {
     try { return { result: await ledger.wallet(args) }; } catch (error) { return { error: { code: error.code ?? -32000, message: error.message, data: error.data } }; }
   });
@@ -88,6 +95,8 @@ try {
     assert.equal(await page.title(), 'Fieldkit · Testnet equipment rental');
     const bounds = await page.getByRole('button', { name: 'Connect wallet', exact: true }).boundingBox();
     assert(bounds.y + bounds.height < 844, 'Primary connect action is on the first 390px screen');
+    const product = await page.getByRole('heading', { name: 'Equipment · Item 1', exact: true }).boundingBox();
+    assert(product.y + product.height < 844, 'Equipment item 1 is on the first 390px screen');
     await page.getByRole('button', { name: 'Connect wallet', exact: true }).focus();
     await page.keyboard.press('Enter');
     await page.getByRole('dialog', { name: 'Connect a wallet' }).waitFor();
@@ -95,7 +104,7 @@ try {
     assert(await page.evaluate(() => !!document.activeElement.closest('dialog')), 'Modal focus stays inside the native dialog');
     await page.keyboard.press('Escape');
     assert(await page.getByRole('button', { name: 'Connect wallet', exact: true }).evaluate(el => document.activeElement === el), 'Escape restores focus to the connect trigger');
-    await checkOverflow(page, 320); await checkOverflow(page, 390); await checkOverflow(page, 1440); await checkOverflow(page, 390);
+    await checkOverflow(page, 320); await checkOverflow(page, 390); await checkOverflow(page, 768); await checkOverflow(page, 1440); await checkOverflow(page, 390);
     await page.screenshot({ path: `${screenshots}/390-disconnected.png`, fullPage: true });
     await connect(page); await approve(page);
     const tokenAbi = JSON.parse(await readFile('src/abi/MockPaymentToken.json', 'utf8'));
@@ -149,6 +158,71 @@ try {
     assert.equal(await page.getByText('Successful receipt observed · withdraw', { exact: true }).count(), 0);
     assert.equal(ledger.broadcasts.length, 4);
     results.push({ scenario: 'Complete journey, exact approval, pending reload, booking recovery, foreign lookup, snapshot policy, cancel credit, aggregate withdrawal, chain switch and account clearing', passed: true });
+    await context.close();
+  }
+  {
+    const ledger = createLedger();
+    const wallet = ledger.wallet;
+    const attempts = [];
+    let originalHash;
+    ledger.wallet = async args => {
+      const isReservation = args.method === 'eth_sendTransaction' && args.params[0].to.toLowerCase() === ESCROW;
+      if (isReservation) attempts.push(args.params[0].data);
+      // Lose only the first reservation response AFTER the mock wallet records its broadcast.
+      const result = await wallet(args);
+      if (isReservation && attempts.length === 1) {
+        originalHash = result;
+        throw Object.assign(new Error('Transport lost the reservation response after broadcast'), { code: -32000 });
+      }
+      return result;
+    };
+    const { page, context } = await setup(ledger); await connect(page); await approve(page);
+    ledger.holdReceipts = true;
+    await page.getByRole('button', { name: 'Reserve item 1', exact: true }).click();
+    await page.getByRole('alert').waitFor();
+    await visible(page, 'Confirmation unknown');
+    const savedOperation = async () => page.evaluate(() => JSON.parse(Object.entries(localStorage).find(([key]) => key.startsWith('fieldkit:v1:'))[1]).operation);
+    const original = await savedOperation();
+    const escrowAbi = JSON.parse(await readFile('src/abi/RentalEscrow.json', 'utf8'));
+    assert.equal(decodeFunctionData({ abi: escrowAbi, data: attempts[0] }).args[2], original.ref);
+    assert.equal(original.phase, 'uncertain'); assert.equal(original.hash, undefined);
+    assert.equal(ledger.broadcasts.length, 2, 'Approval and original reservation were broadcast in the mock');
+    assert.equal(ledger.txs.get(originalHash).mined, false);
+    assert.equal(ledger.refs.size, 0, 'Original is still pending; the mapping is zero');
+
+    ledger.rejectNext = true;
+    await page.getByRole('button', { name: 'Retry same booking reference', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: /rejected/i }).waitFor();
+    assert.deepEqual(await savedOperation(), original, 'Rejecting only the retry preserves the entire original request');
+    assert.equal(attempts.length, 2); assert.equal(attempts[1], attempts[0], 'Retry uses the exact original calldata');
+    await page.getByText(original.ref, { exact: true }).waitFor();
+    await page.getByText('Pending reservation', { exact: true }).waitFor();
+    assert.match(await page.getByRole('alert').innerText(), /retry.*rejected.*earlier booking may still be pending/i);
+    assert.equal(await page.getByRole('button', { name: 'Reserve item 1', exact: true }).isDisabled(), true);
+    assert.equal(await page.locator('.action-steps button:enabled').count(), 0, 'No fresh approval or reservation is offered');
+    assert.equal(ledger.broadcasts.length, 2, 'Rejected retry did not broadcast');
+    await checkOverflow(page, 320); await checkOverflow(page, 390); await checkOverflow(page, 1440); await checkOverflow(page, 390);
+    await page.screenshot({ path: `${screenshots}/390-retry-rejected.png`, fullPage: true });
+
+    await page.reload();
+    await page.getByRole('alert').filter({ hasText: 'No transaction hash is known' }).waitFor();
+    assert.deepEqual(await savedOperation(), original, 'Reload preserves original terms, calldata, reference, block and start time');
+    await page.getByText(original.ref, { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Reserve item 1', exact: true }).isDisabled(), true);
+    assert.equal(await page.locator('.action-steps button:enabled').count(), 0);
+    assert.equal(attempts.length, 2); assert.equal(ledger.broadcasts.length, 2);
+
+    // Mine only the original in the isolated ledger, then recover via its reference and event.
+    ledger.holdReceipts = false;
+    await ledger.rpc({ method: 'eth_getTransactionReceipt', params: [originalHash] });
+    await page.locator('.pending-panel').getByRole('button', { name: 'Check pending request', exact: true }).click();
+    await visible(page, 'Reservation confirmed. Its accepted terms were read from getReservation.');
+    await visible(page, 'Reservation #7');
+    assert.equal(await savedOperation(), undefined);
+    assert.equal(ledger.reservations.get(7n).clientRef, original.ref);
+    assert.equal(ledger.balances.get(RENTER), 50_000_000n);
+    assert.equal(attempts.length, 2); assert.equal(ledger.broadcasts.length, 2, 'Original recovery requests no additional payment');
+    results.push({ scenario: 'Lost response after recorded broadcast, pending zero mapping, same-calldata retry rejected, original reference retained/visible, fresh actions blocked through reload, original mining and receipt recovery without another send', passed: true });
     await context.close();
   }
   {
@@ -208,7 +282,9 @@ try {
     await context.close();
   }
   assert.deepEqual(errors, [], 'No browser JavaScript errors');
-  const report = { environment: 'Chromium; mocked EIP-6963 Rabby and intercepted public RPC; production dist under /preview/; zero live writes', viewports: [320, 390, 1440], results, pageErrors: errors };
+  assert.deepEqual(resourceErrors, [], 'No missing or failed local production resources');
+  const report = { environment: 'Chromium; mocked EIP-6963 Rabby and intercepted public RPC; production dist under /preview/; zero live writes', browserVersion: browser.version(), viewports: [320, 390, 768, 1440], results, pageErrors: errors, resourceErrors };
+  await mkdir('artifacts', { recursive: true });
   await writeFile('artifacts/browser-results.json', JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
 } finally {

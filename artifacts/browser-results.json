@@ -1,0 +1,34 @@
+{
+  "environment": "Chromium; mocked EIP-6963 Rabby and intercepted public RPC; production dist under /preview/; zero live writes",
+  "browserVersion": "141.0.7390.37",
+  "viewports": [
+    320,
+    390,
+    768,
+    1440
+  ],
+  "results": [
+    {
+      "scenario": "Complete journey, exact approval, pending reload, booking recovery, foreign lookup, snapshot policy, cancel credit, aggregate withdrawal, chain switch and account clearing",
+      "passed": true
+    },
+    {
+      "scenario": "Lost response after recorded broadcast, pending zero mapping, same-calldata retry rejected, original reference retained/visible, fresh actions blocked through reload, original mining and receipt recovery without another send",
+      "passed": true
+    },
+    {
+      "scenario": "Rejected wallet prompt, reverted receipt, renewed policy acceptance, honest RPC failure/retry, text-only metadata and disconnect",
+      "passed": true
+    },
+    {
+      "scenario": "Phone wallet picker without injection: four open-in links and Coinbase Smart Wallet; no relay or project ID",
+      "passed": true
+    },
+    {
+      "scenario": "Maximum uint256 6-decimal values, maximum policy ID and long untrusted metadata wrap at 320, 390 and 1440",
+      "passed": true
+    }
+  ],
+  "pageErrors": [],
+  "resourceErrors": []
+}

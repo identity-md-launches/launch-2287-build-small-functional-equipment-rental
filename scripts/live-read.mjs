@@ -1,6 +1,6 @@
 // Public testnet reads only. No wallet, signing or write RPC methods are used.
 import { createPublicClient, http, defineChain } from 'viem';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 const rpc = 'https://rpc.testnet.chain.robinhood.com';
 const token = '0x31339619db548257cE09A76f189b0b1932f5c0cd';
 const escrow = '0x06135FF9311eCa80a7484444A552f28fFC660F05';
@@ -18,5 +18,6 @@ if (chainId !== 46630 || !codeToken || !codeEscrow || configuredToken.toLowerCas
 const quote = await read(escrow, escrowAbi, 'quote', [1n]);
 const report = { checkedAt: new Date().toISOString(), source: rpc, access: 'read-only; no worker transactions', chainId, blockNumber: block.number, blockTimestamp: block.timestamp, contractsHaveCode: true, configuredToken, decimals, symbol, item, quote };
 const json = JSON.stringify(report, (_, v) => typeof v === 'bigint' ? v.toString() : v, 2);
+await mkdir('artifacts', { recursive: true });
 await writeFile('artifacts/live-read.json', json + '\n');
 console.log(json);

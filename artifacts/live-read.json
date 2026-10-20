@@ -1,0 +1,28 @@
+{
+  "checkedAt": "2026-10-20T13:41:31.797Z",
+  "source": "https://rpc.testnet.chain.robinhood.com",
+  "access": "read-only; no worker transactions",
+  "chainId": 46630,
+  "blockNumber": "139451427",
+  "blockTimestamp": "1792503691",
+  "contractsHaveCode": true,
+  "configuredToken": "0x31339619db548257cE09A76f189b0b1932f5c0cd",
+  "decimals": 6,
+  "symbol": "dds",
+  "item": {
+    "exists": true,
+    "listed": true,
+    "state": 0,
+    "policyId": "1",
+    "activeReservationId": "0",
+    "metadataURI": "ipfs://rental-trial/cordless-drill"
+  },
+  "quote": [
+    "1",
+    {
+      "deposit": "50000000",
+      "cancellationFee": "5000000",
+      "reservationWindow": "86400"
+    }
+  ]
+}
