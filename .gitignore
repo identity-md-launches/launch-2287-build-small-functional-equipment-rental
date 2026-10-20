@@ -1,0 +1,5 @@
+# Explicit path budget: /node_modules/** = 0 submitted bytes (installed dependencies).
+/node_modules/
+# Explicit path budget: /test/scratch/** = 0 submitted bytes (disposable checks).
+/test/scratch/
+# dist/ is a required, submitted production export. Do not ignore it.
